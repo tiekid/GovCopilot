@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual Environment
+.venv/
+venv/
+
+# VS Code
+.vscode/
+
+# Environment
+.env
+
+# Logs
+logs/
+
+# Output
+output/
+
+# Playwright
+profile/
+
+# Cache
+.pytest_cache/
+
+# Build
+dist/
+build/
+
+# Windows
+Thumbs.db
