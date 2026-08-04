@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import List
 
+from models.document import MeetingDocument
+
 
 @dataclass
 class AgendaItem:
@@ -24,3 +26,4 @@ class Meeting:
 
     # Nội dung
     agenda: List[AgendaItem] = field(default_factory=list)
+    documents: List[MeetingDocument] = field(default_factory=list)
