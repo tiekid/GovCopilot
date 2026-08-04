@@ -1,115 +1,80 @@
+"""Agent that extracts referenced document numbers from meeting invitation text."""
+
+import logging
 import re
-from dataclasses import dataclass, asdict
-from typing import List
+from typing import List, Pattern, Tuple
+
+from models.document import MeetingDocument
+
+logger = logging.getLogger(__name__)
+
+_AGENCY_PATTERN: Pattern[str] = re.compile(r"^\d+\.\s*(.+?)\s+trình[:：]", re.IGNORECASE)
+
+_DOCUMENT_TYPE_PATTERNS: Tuple[Tuple[str, Pattern[str]], ...] = (
+    ("Tờ trình", re.compile(r"Tờ trình\s+số\s+([0-9]+\/[A-Za-z\-]+)", re.IGNORECASE)),
+    ("Báo cáo", re.compile(r"Báo cáo\s+số\s+([0-9]+\/[A-Za-z\-]+)", re.IGNORECASE)),
+    ("Công văn", re.compile(r"Công văn\s+số\s+([0-9]+\/[A-Za-z\-]+)", re.IGNORECASE)),
+)
 
 
-@dataclass
-class MeetingDocument:
-    agency: str
-    doc_type: str
-    number: str
-    title: str
-
-
-class DocumentExtractor:
-
-    def __init__(self):
-        pass
+class DocumentExtractorAgent:
+    """Extracts every referenced document number from meeting invitation text."""
 
     def extract(self, text: str) -> List[MeetingDocument]:
 
-        documents = []
+        documents: List[MeetingDocument] = []
 
         current_agency = ""
 
-        lines = text.splitlines()
-
-        for line in lines:
+        for line in text.splitlines():
 
             line = line.strip()
 
             if not line:
                 continue
 
-            # ----------------------------
-            # Nhận diện cơ quan
-            # ----------------------------
+            agency_match = _AGENCY_PATTERN.match(line)
 
-            m = re.match(r"^\d+\.\s*(.+?)\s+trình[:：]", line, re.IGNORECASE)
-
-            if m:
-                current_agency = m.group(1).strip()
+            if agency_match:
+                current_agency = agency_match.group(1).strip()
                 continue
 
-            # ----------------------------
-            # Tờ trình
-            # ----------------------------
+            for document_type, pattern in _DOCUMENT_TYPE_PATTERNS:
+                documents.extend(
+                    self._extract_documents(line, current_agency, document_type, pattern)
+                )
 
-            docs = self._extract_doc(
-                line,
-                current_agency,
-                "Tờ trình",
-                r"Tờ trình\s+số\s+([0-9]+\/[A-Za-z\-]+)"
-            )
-
-            documents.extend(docs)
-
-            # ----------------------------
-            # Báo cáo
-            # ----------------------------
-
-            docs = self._extract_doc(
-                line,
-                current_agency,
-                "Báo cáo",
-                r"Báo cáo\s+số\s+([0-9]+\/[A-Za-z\-]+)"
-            )
-
-            documents.extend(docs)
-
-            # ----------------------------
-            # Công văn
-            # ----------------------------
-
-            docs = self._extract_doc(
-                line,
-                current_agency,
-                "Công văn",
-                r"Công văn\s+số\s+([0-9]+\/[A-Za-z\-]+)"
-            )
-
-            documents.extend(docs)
+        logger.info("Extracted %d document(s) from invitation text", len(documents))
 
         return documents
 
-    def _extract_doc(
+    def _extract_documents(
         self,
-        line,
-        agency,
-        doc_type,
-        pattern
-    ):
+        line: str,
+        agency: str,
+        document_type: str,
+        pattern: Pattern[str],
+    ) -> List[MeetingDocument]:
 
-        result = []
+        result: List[MeetingDocument] = []
 
-        matches = re.finditer(pattern, line, re.IGNORECASE)
+        for match in pattern.finditer(line):
 
-        for m in matches:
+            number = match.group(1)
 
-            number = m.group(1)
-
-            title = line[m.end():].strip()
-
-            title = title.lstrip(":")
-            title = title.strip()
+            title = line[match.end():].lstrip(":").strip()
 
             result.append(
                 MeetingDocument(
                     agency=agency,
-                    doc_type=doc_type,
+                    document_type=document_type,
                     number=number,
-                    title=title
+                    title=title,
                 )
             )
 
         return result
+
+
+# Backward-compatible alias for the pre-refactor class name.
+DocumentExtractor = DocumentExtractorAgent
