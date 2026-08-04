@@ -39,43 +39,46 @@ InvitationReader -> MeetingParserAgent -> VBSearchAgent -> DownloadAgent -> Revi
    returns a structured `Meeting` object: title, chairman, date, time,
    location, participants, agenda items, and every referenced document
    number (via `DocumentExtractorAgent`).
-3. **`VBSearchAgent`** *(planned, Sprint 2)* takes the `Meeting` object,
-   logs into VBĐH (`browser/login.py`), and searches for each document in
+3. **`VBSearchAgent`** takes the `Meeting` object, logs into VBĐH
+   (`browser/login.py`), and searches for each document in
    `Meeting.documents`, resolving each `MeetingDocument` to a downloadable
    attachment.
-4. **`DownloadAgent`** *(planned, Sprint 3)* downloads every resolved
-   attachment, updating `MeetingDocument.downloaded` and
-   `MeetingDocument.local_path` on the same `Meeting` object.
-5. **`ReviewAgent`** *(planned, Sprint 4)* uses AI to summarize each
-   downloaded document.
-6. **`ProposalAgent`** *(planned, Sprint 4)* uses AI to draft advisory
-   proposals from the reviewed documents.
-7. **`ExportAgent`** *(planned, Sprint 5)* generates the final Word
-   advisory report from the fully enriched `Meeting` object.
+4. **`DownloadAgent`** downloads every resolved attachment, updating
+   `MeetingDocument.downloaded` and `MeetingDocument.local_path` on the
+   same `Meeting` object.
+5. **`ReviewAgent`** uses AI to summarize each downloaded document.
+6. **`ProposalAgent`** uses AI to draft advisory proposals from the
+   reviewed documents.
+7. **`ExportAgent`** generates the final Word advisory report from the
+   fully enriched `Meeting` object.
 
 The `Meeting` object (`models/meeting.py`) is the single artifact passed
 from stage to stage — no stage re-reads the source file or re-derives data
 another stage already produced.
 
+Current implementation progress for each stage is tracked in
+`docs/PROJECT_STATUS.md`, not here.
+
 ## Agent Responsibilities
 
 This is the single source of truth for what each component is (and is not)
-responsible for. Module/status metadata and behavioral rules live together,
-per component, so there is one place to update when either changes.
+responsible for. Each entry lists the component's module path and its
+behavioral rules. Implementation status is tracked separately, in
+`docs/PROJECT_STATUS.md` — not here.
 
 ### InvitationReader
-**Module:** `parser/invitation_reader.py` · **Status:** Implemented
+**Module:** `parser/invitation_reader.py`
 - Read PDF/DOCX, return plain text.
 - The only PDF/DOCX reader in the codebase.
 
 ### DocumentExtractorAgent
-**Module:** `agents/document_extractor.py` · **Status:** Implemented
+**Module:** `agents/document_extractor.py`
 - Extract every referenced document number (Tờ trình / Báo cáo / Công văn)
   from invitation text.
 - Used by `MeetingParserAgent`.
 
 ### BrowserSession
-**Module:** `browser/login.py` · **Status:** Implemented
+**Module:** `browser/login.py`
 - Open the persistent Playwright browser.
 - Manage the browser lifecycle.
 - Navigate to VB_URL.
@@ -84,14 +87,14 @@ per component, so there is one place to update when either changes.
 - Never determine authentication state.
 
 ### MeetingParserAgent
-**Module:** `agents/meeting_parser.py` · **Status:** Implemented
+**Module:** `agents/meeting_parser.py`
 - Parse invitation text.
 - Build the Meeting model.
 - Reuse `DocumentExtractorAgent`.
 - Never read PDF/DOCX directly.
 
 ### VBSearchAgent
-**Module:** `agents/` *(planned, Sprint 2)* · **Status:** Not started
+**Module:** `agents/vb_search.py`
 - Determine authentication state.
 - Handle login flow when required.
 - Search VBĐH using `Meeting.documents`.
@@ -99,23 +102,23 @@ per component, so there is one place to update when either changes.
 - Reuse `BrowserSession`.
 
 ### DownloadAgent
-**Module:** `agents/` *(planned, Sprint 3)* · **Status:** Not started
+**Module:** `agents/`
 - Download attachments.
 - Update `MeetingDocument` status.
 - Never search documents.
 
 ### ReviewAgent
-**Module:** `ai/review.py` *(planned, Sprint 4)* · **Status:** Not started
+**Module:** `ai/review.py`
 - AI review of downloaded documents.
 - Generate structured summaries.
 
 ### ProposalAgent
-**Module:** `ai/proposal.py` *(planned, Sprint 4)* · **Status:** Not started
+**Module:** `ai/proposal.py`
 - Generate the advisory report.
 - Use `ReviewAgent` output only.
 
 ### ExportAgent
-**Module:** `agents/` *(planned, Sprint 5)* · **Status:** Not started
+**Module:** `agents/`
 - Generate the final Word report.
 - Never perform AI analysis.
 
