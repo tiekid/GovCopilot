@@ -57,18 +57,67 @@ The `Meeting` object (`models/meeting.py`) is the single artifact passed
 from stage to stage — no stage re-reads the source file or re-derives data
 another stage already produced.
 
-## Agent responsibilities
+## Agent Responsibilities
 
-| Agent | Module | Status | Responsibility |
-|---|---|---|---|
-| `InvitationReader` | `parser/invitation_reader.py` | Implemented | Read PDF/DOCX, return plain text. The only PDF/DOCX reader in the codebase. |
-| `DocumentExtractorAgent` | `agents/document_extractor.py` | Implemented | Extract every referenced document number (Tờ trình / Báo cáo / Công văn) from invitation text. Used by `MeetingParserAgent`. |
-| `MeetingParserAgent` | `agents/meeting_parser.py` | Implemented | Parse invitation text (regex, deterministic — no AI) into a structured `Meeting`, delegating document-number extraction to `DocumentExtractorAgent`. |
-| `VBSearchAgent` | `agents/` *(planned)* | Not started | Log into VBĐH and search for each document referenced by `Meeting.documents`. |
-| `DownloadAgent` | `agents/` *(planned)* | Not started | Download every located attachment; update `MeetingDocument` with local paths. |
-| `ReviewAgent` | `ai/review.py` *(planned)* | Not started | AI summary of each downloaded document. |
-| `ProposalAgent` | `ai/proposal.py` *(planned)* | Not started | AI-drafted advisory proposal from reviewed documents. |
-| `ExportAgent` | `agents/` *(planned)* | Not started | Generate the final Word advisory report. |
+This is the single source of truth for what each component is (and is not)
+responsible for. Module/status metadata and behavioral rules live together,
+per component, so there is one place to update when either changes.
+
+### InvitationReader
+**Module:** `parser/invitation_reader.py` · **Status:** Implemented
+- Read PDF/DOCX, return plain text.
+- The only PDF/DOCX reader in the codebase.
+
+### DocumentExtractorAgent
+**Module:** `agents/document_extractor.py` · **Status:** Implemented
+- Extract every referenced document number (Tờ trình / Báo cáo / Công văn)
+  from invitation text.
+- Used by `MeetingParserAgent`.
+
+### BrowserSession
+**Module:** `browser/login.py` · **Status:** Implemented
+- Open the persistent Playwright browser.
+- Manage the browser lifecycle.
+- Navigate to VB_URL.
+- Return the active page.
+- Never contain business logic.
+- Never determine authentication state.
+
+### MeetingParserAgent
+**Module:** `agents/meeting_parser.py` · **Status:** Implemented
+- Parse invitation text.
+- Build the Meeting model.
+- Reuse `DocumentExtractorAgent`.
+- Never read PDF/DOCX directly.
+
+### VBSearchAgent
+**Module:** `agents/` *(planned, Sprint 2)* · **Status:** Not started
+- Determine authentication state.
+- Handle login flow when required.
+- Search VBĐH using `Meeting.documents`.
+- Return document links/results.
+- Reuse `BrowserSession`.
+
+### DownloadAgent
+**Module:** `agents/` *(planned, Sprint 3)* · **Status:** Not started
+- Download attachments.
+- Update `MeetingDocument` status.
+- Never search documents.
+
+### ReviewAgent
+**Module:** `ai/review.py` *(planned, Sprint 4)* · **Status:** Not started
+- AI review of downloaded documents.
+- Generate structured summaries.
+
+### ProposalAgent
+**Module:** `ai/proposal.py` *(planned, Sprint 4)* · **Status:** Not started
+- Generate the advisory report.
+- Use `ReviewAgent` output only.
+
+### ExportAgent
+**Module:** `agents/` *(planned, Sprint 5)* · **Status:** Not started
+- Generate the final Word report.
+- Never perform AI analysis.
 
 ## Hard rules
 
