@@ -1,11 +1,13 @@
-"""Agent that submits a VBĐH document-number search for each MeetingDocument.
+"""Agent that searches VBĐH for each MeetingDocument and opens a match.
 
-Scope for this sprint: navigate to the search page, fill the verified
-search field, submit the search, and wait for the request to complete.
-It reports only whether the search operation itself succeeded — it does
-not inspect results, determine whether a document was found, open any
-result, or download anything. All selectors below are verified via
+Navigates to the VBĐH search page, submits a search for each document
+number, and — using a verified generic result-cell selector — locates
+and opens the matching result. All selectors below are verified via
 Playwright Codegen against the real VBĐH system; none are guessed.
+
+Read-only: opening a match reveals the `#formXuLy` modal, but this
+agent never interacts with it further, never downloads, and never
+performs AI analysis. That is out of scope for VBSearchAgent.
 """
 
 import logging
@@ -28,29 +30,34 @@ _NUMBER_FIELD_ROLE_NAME = "Nhập số, ký hiệu"
 _SEARCH_FORM_SELECTOR = "#formTimKiem"
 _SEARCH_SUBMIT_TEXT = "Tìm kiếm"
 
+# Verified generic result-cell selector (Codegen recording covering two
+# distinct documents — confirmed not tied to any one document's text).
+_RESULT_CELL_SELECTOR = 'td.so-hieu[ng-click="$p.showFormXuLyClick(item)"]'
+
 
 @dataclass
 class VBSearchResult:
     """Outcome of submitting a VBĐH search for one MeetingDocument.
 
-    ``success`` means only that the search operation completed without
-    error. It does not indicate whether a matching document was found —
-    that requires inspecting results, which is deferred to a later
-    sprint pending a verified generic result-row selector.
+    ``detail_url`` is always ``None`` this sprint: opening a match reveals
+    the ``#formXuLy`` modal rather than navigating to a detail page, so
+    there is no URL to capture. The field is kept (rather than removed)
+    so the public API doesn't change again once a detail-page workflow
+    exists.
     """
 
     document: MeetingDocument
     success: bool
+    found: bool
     detail_url: Optional[str] = None
     error: Optional[str] = None
 
 
 class VBSearchAgent:
-    """Submits a VBĐH document-number search for each MeetingDocument.
+    """Searches VBĐH for each MeetingDocument and opens a matching result.
 
-    Read-only and search-only: navigates to the search page, fills and
-    submits the search form, and waits for the request to complete.
-    Never inspects results, opens a document, or downloads anything.
+    Never downloads, never performs AI analysis, and never interacts
+    with the `#formXuLy` modal beyond the click that opens it.
     """
 
     def __init__(self, browser_session: BrowserSession) -> None:
@@ -64,8 +71,9 @@ class VBSearchAgent:
             results.append(self._search_one(document))
 
         logger.info(
-            "VBĐH search requests complete: %d succeeded, %d failed",
+            "VBĐH search complete: %d succeeded, %d found, %d failed",
             sum(1 for r in results if r.success),
+            sum(1 for r in results if r.found),
             sum(1 for r in results if not r.success),
         )
 
@@ -85,13 +93,18 @@ class VBSearchAgent:
 
             page.wait_for_load_state("networkidle")
 
-            logger.info("VBĐH search request completed for document number %s", document.number)
+            found = self._open_matching_result(page, document)
 
-            return VBSearchResult(document=document, success=True)
+            if found:
+                logger.info("Opened matching VBĐH result for document number %s", document.number)
+            else:
+                logger.warning("No matching VBĐH result for document number %s", document.number)
+
+            return VBSearchResult(document=document, success=True, found=found)
 
         except Exception as exc:
-            logger.exception("VBĐH search request failed for document number %s", document.number)
-            return VBSearchResult(document=document, success=False, error=str(exc))
+            logger.exception("VBĐH search failed for document number %s", document.number)
+            return VBSearchResult(document=document, success=False, found=False, error=str(exc))
 
     def _navigate_to_search_page(self, page: Page) -> None:
         """Reach the incoming-documents search page via the verified menu path.
@@ -104,3 +117,29 @@ class VBSearchAgent:
         page.get_by_text(_MENU_MANAGEMENT_TEXT).click()
         page.get_by_text(_MENU_SEARCH_TEXT).click()
         page.get_by_role("link", name=_MENU_INCOMING_DOCS_LINK_NAME).click()
+
+    def _open_matching_result(self, page: Page, document: MeetingDocument) -> bool:
+        """Locate the result cell exactly matching ``document.number`` and click it.
+
+        Comparison ignores whitespace/line breaks; the first exact match
+        is clicked. Clicking opens the `#formXuLy` modal, which this
+        agent does not otherwise interact with.
+        """
+
+        cells = page.locator(_RESULT_CELL_SELECTOR)
+        target = self._normalize(document.number)
+
+        for index in range(cells.count()):
+            cell = cells.nth(index)
+
+            if self._normalize(cell.inner_text()) == target:
+                cell.click()
+                return True
+
+        return False
+
+    @staticmethod
+    def _normalize(text: str) -> str:
+        """Strip all whitespace/line breaks for exact, whitespace-insensitive comparison."""
+
+        return "".join(text.split())
