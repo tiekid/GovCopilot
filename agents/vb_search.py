@@ -36,6 +36,13 @@ _SEARCH_SUBMIT_TEXT = "Tìm kiếm"
 # distinct documents — confirmed not tied to any one document's text).
 _RESULT_CELL_SELECTOR = 'td.so-hieu[ng-click="$p.showFormXuLyClick(item)"]'
 
+# Verified against the real VBĐH system (network instrumentation): the
+# actual search API request/response, confirmed to resolve correctly
+# whether the search returns 0 or N results — unlike any DOM signal,
+# which was confirmed to render nothing at all for a zero-result search.
+_SEARCH_RESPONSE_URL_SUBSTRING = "GetVanBansByPage"
+_SEARCH_RESPONSE_TIMEOUT_MS = 15_000
+
 
 @dataclass
 class VBSearchResult:
@@ -76,10 +83,7 @@ class VBSearchAgent:
         try:
             self._navigate_to_search_page(page)
 
-            page.get_by_role("textbox", name=_NUMBER_FIELD_ROLE_NAME).fill(document.number)
-            page.locator(_SEARCH_FORM_SELECTOR).get_by_text(_SEARCH_SUBMIT_TEXT).click()
-
-            page.wait_for_load_state("networkidle")
+            self._submit_search(page, document)
 
             found = self._open_matching_result(page, document)
 
@@ -105,6 +109,31 @@ class VBSearchAgent:
         page.get_by_text(_MENU_MANAGEMENT_TEXT).click()
         page.get_by_text(_MENU_SEARCH_TEXT).click()
         page.get_by_role("link", name=_MENU_INCOMING_DOCS_LINK_NAME).click()
+
+    def _submit_search(self, page: Page, document: MeetingDocument) -> None:
+        """Fill and submit the search, waiting for the actual search API response.
+
+        Uses page.expect_response() around the submit click to wait for
+        the real search request/response round-trip, not a DOM guess —
+        verified against the real system to resolve correctly whether
+        the search returns 0 or N results. A non-200 response, or the
+        response never arriving within the timeout, is treated as a
+        search failure (raised here, becomes success=False), not "not
+        found".
+        """
+
+        page.get_by_role("textbox", name=_NUMBER_FIELD_ROLE_NAME).fill(document.number)
+
+        with page.expect_response(
+            lambda response: _SEARCH_RESPONSE_URL_SUBSTRING in response.url,
+            timeout=_SEARCH_RESPONSE_TIMEOUT_MS,
+        ) as response_info:
+            page.locator(_SEARCH_FORM_SELECTOR).get_by_text(_SEARCH_SUBMIT_TEXT).click()
+
+        response = response_info.value
+
+        if response.status != 200:
+            raise RuntimeError(f"VBĐH search request failed with HTTP {response.status}")
 
     def _open_matching_result(self, page: Page, document: MeetingDocument) -> bool:
         """Locate the result cell exactly matching ``document.number`` and click it.
