@@ -1,10 +1,11 @@
 """Agent that downloads the attachment for an already-opened VBĐH document.
 
 Assumes VBSearchAgent has already located and opened a matching
-document (the #formXuLy modal). This agent only downloads the
-attachment for that already-open document — it never searches,
-reopens the modal, navigates, or performs AI analysis. It is a
-single-document component; batch orchestration belongs to the caller.
+document (the #formXuLy modal) on the shared browser session. This
+agent only downloads the attachment for that already-open document —
+it never searches, reopens the modal, navigates, or performs AI
+analysis. It is a single-document component; batch orchestration
+belongs to the caller.
 """
 
 import logging
@@ -12,8 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from playwright.sync_api import Page
-
+from browser.login import BrowserSession
 from models.document import MeetingDocument
 
 logger = logging.getLogger(__name__)
@@ -39,10 +39,13 @@ class DownloadAgent:
     performs AI analysis.
     """
 
-    def __init__(self, download_dir: Path) -> None:
+    def __init__(self, browser_session: BrowserSession, download_dir: Path) -> None:
+        self._browser_session = browser_session
         self._download_dir = download_dir
 
-    def download(self, page: Page, document: MeetingDocument) -> DownloadResult:
+    def download(self, document: MeetingDocument) -> DownloadResult:
+
+        page = self._browser_session.get_page()
 
         logger.info("Downloading attachment for document number %s", document.number)
 

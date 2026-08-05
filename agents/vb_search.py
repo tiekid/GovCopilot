@@ -1,18 +1,20 @@
-"""Agent that searches VBĐH for each MeetingDocument and opens a match.
+"""Agent that searches VBĐH for a single MeetingDocument and opens a match.
 
-Navigates to the VBĐH search page, submits a search for each document
+Navigates to the VBĐH search page, submits a search for the document
 number, and — using a verified generic result-cell selector — locates
 and opens the matching result. All selectors below are verified via
 Playwright Codegen against the real VBĐH system; none are guessed.
 
 Read-only: opening a match reveals the `#formXuLy` modal, but this
 agent never interacts with it further, never downloads, and never
-performs AI analysis. That is out of scope for VBSearchAgent.
+performs AI analysis. That is out of scope for VBSearchAgent. Batch
+orchestration across multiple documents belongs to the caller, not
+this agent.
 """
 
 import logging
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Optional
 
 from playwright.sync_api import Page
 
@@ -54,32 +56,18 @@ class VBSearchResult:
 
 
 class VBSearchAgent:
-    """Searches VBĐH for each MeetingDocument and opens a matching result.
+    """Searches VBĐH for one MeetingDocument and opens a matching result.
 
-    Never downloads, never performs AI analysis, and never interacts
-    with the `#formXuLy` modal beyond the click that opens it.
+    Single-document component: batch orchestration across multiple
+    documents belongs to the caller. Never downloads, never performs AI
+    analysis, and never interacts with the `#formXuLy` modal beyond the
+    click that opens it.
     """
 
     def __init__(self, browser_session: BrowserSession) -> None:
         self._browser_session = browser_session
 
-    def search(self, documents: List[MeetingDocument]) -> List[VBSearchResult]:
-
-        results: List[VBSearchResult] = []
-
-        for document in documents:
-            results.append(self._search_one(document))
-
-        logger.info(
-            "VBĐH search complete: %d succeeded, %d found, %d failed",
-            sum(1 for r in results if r.success),
-            sum(1 for r in results if r.found),
-            sum(1 for r in results if not r.success),
-        )
-
-        return results
-
-    def _search_one(self, document: MeetingDocument) -> VBSearchResult:
+    def search(self, document: MeetingDocument) -> VBSearchResult:
 
         page = self._browser_session.get_page()
 
