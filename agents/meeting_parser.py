@@ -2,9 +2,10 @@
 
 import logging
 import re
-from typing import List, Optional, Pattern
+from typing import List, Optional, Pattern, Tuple
 
 from ai.invitation_extractor import AIInvitationExtractor
+from models.document import MeetingDocument
 from models.meeting import AgendaItem, Meeting
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,8 @@ class MeetingParserAgent:
         meeting.agenda = self._extract_agenda(text)
         meeting.documents = self._ai_extractor.extract_documents(text)
 
+        self._assign_agenda_item_indices(text, meeting.agenda, meeting.documents)
+
         logger.info(
             "Parsed meeting '%s' with %d agenda item(s) and %d document(s)",
             meeting.meeting_name,
@@ -102,6 +105,93 @@ class MeetingParserAgent:
             )
 
         return agenda
+
+    def _assign_agenda_item_indices(
+        self, text: str, agenda: List[AgendaItem], documents: List[MeetingDocument]
+    ) -> None:
+        """Map each document to the ND (AgendaItem) it was referenced under.
+
+        Text-position correlation: each AgendaItem's heading line marks
+        where its ND block starts in the invitation text; a document
+        belongs to whichever block's heading is the last one appearing
+        before that document number's own first occurrence in the
+        text. Mutates `documents` in place.
+
+        Never invents a mapping — if a document's number doesn't
+        actually occur in the invitation text, or there are no agenda
+        items at all, agenda_item_index stays None and a WARNING is
+        logged so the gap is visible, not silently dropped (the caller,
+        NormalizationAgent, groups these as "unassigned ND").
+        """
+
+        if not agenda:
+            for document in documents:
+                document.agenda_item_index = None
+            if documents:
+                logger.warning(
+                    "No agenda items parsed from invitation text; %d document(s) "
+                    "left without an agenda_item_index",
+                    len(documents),
+                )
+            return
+
+        boundaries = self._agenda_heading_offsets(text, agenda)
+
+        for document in documents:
+            position = text.find(document.number)
+
+            if position == -1:
+                document.agenda_item_index = None
+                logger.warning(
+                    "Document number %s not found in invitation text; cannot "
+                    "determine its agenda item (ND)",
+                    document.number,
+                )
+                continue
+
+            document.agenda_item_index = self._agenda_index_for_position(position, boundaries)
+
+    @staticmethod
+    def _agenda_heading_offsets(text: str, agenda: List[AgendaItem]) -> List[Tuple[int, int]]:
+        """Character offset where each agenda item's heading line starts, in order.
+
+        Re-scans line by line (like _extract_agenda) rather than
+        reusing its output directly, because offsets specifically
+        require locating each heading line's real position in `text`
+        via `text.index()` — computing offsets by summing line lengths
+        instead would drift against "\\r\\n" vs "\\n" line endings and
+        silently misalign document positions found later via
+        `text.find()`. Searches strictly forward (`search_from`
+        advances past each match) so agenda items are matched in the
+        same order _extract_agenda produced them.
+        """
+
+        boundaries: List[Tuple[int, int]] = []
+        search_from = 0
+
+        for item in agenda:
+            for line in text[search_from:].splitlines():
+                if _AGENDA_PATTERN.match(line.strip()):
+                    offset = text.index(line, search_from)
+                    boundaries.append((offset, item.index))
+                    search_from = offset + len(line)
+                    break
+
+        return boundaries
+
+    @staticmethod
+    def _agenda_index_for_position(position: int, boundaries: List[Tuple[int, int]]) -> Optional[int]:
+        """The agenda item whose heading is the last one before `position`."""
+
+        matched_index: Optional[int] = None
+
+        for offset, index in boundaries:
+            if offset <= position:
+                matched_index = index
+            else:
+                break
+
+        return matched_index
 
     @staticmethod
     def _extract_first(text: str, pattern: Pattern[str], has_group: bool = True) -> str:

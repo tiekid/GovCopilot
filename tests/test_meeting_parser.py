@@ -10,8 +10,10 @@ for it so these tests exercise only the regex/parsing logic.
 """
 
 import unittest
+from typing import List
 
 from agents.meeting_parser import MeetingParserAgent
+from models.document import MeetingDocument
 
 
 class _FakeAIExtractor:
@@ -19,6 +21,17 @@ class _FakeAIExtractor:
 
     def extract_documents(self, text: str):
         return []
+
+
+class _FakeAIExtractorWithNumbers:
+    """Returns a MeetingDocument per configured number, in order — used to
+    test agenda_item_index assignment without touching the real AI path."""
+
+    def __init__(self, numbers: List[str]) -> None:
+        self._numbers = numbers
+
+    def extract_documents(self, text: str) -> List[MeetingDocument]:
+        return [MeetingDocument(number=n) for n in self._numbers]
 
 
 class MeetingParserAgentTests(unittest.TestCase):
@@ -99,6 +112,74 @@ class MeetingParserAgentTests(unittest.TestCase):
             "Phòng họp số 01, tầng 2, Trụ sở UBND tỉnh Tây Ninh",
         )
         self.assertEqual(meeting.chairman, "Ông Nguyễn Văn A")
+
+
+class AgendaItemIndexAssignmentTests(unittest.TestCase):
+    """MeetingDocument.agenda_item_index — text-position correlation
+    between the AI-extracted document list and the regex-extracted
+    agenda (ND) blocks. Real evidence: neither extractor currently
+    links the two on its own (see agents/normalization.py's plan)."""
+
+    def test_documents_are_mapped_to_the_nd_block_they_appear_in(self) -> None:
+        text = (
+            "1. Sở Xây dựng trình:\n"
+            "Tờ trình số 9047/TTr-SXD về việc quy hoạch\n"
+            "\n"
+            "2. Sở Nội vụ trình:\n"
+            "Tờ trình số 8232/TTr-SNV về việc nhân sự\n"
+        )
+        parser = MeetingParserAgent(
+            ai_extractor=_FakeAIExtractorWithNumbers(["9047/TTr-SXD", "8232/TTr-SNV"])
+        )
+
+        meeting = parser.parse(text)
+
+        by_number = {d.number: d for d in meeting.documents}
+        self.assertEqual(by_number["9047/TTr-SXD"].agenda_item_index, 1)
+        self.assertEqual(by_number["8232/TTr-SNV"].agenda_item_index, 2)
+
+    def test_document_number_not_found_in_text_stays_unassigned_and_logs_warning(self) -> None:
+        text = "1. Sở Xây dựng trình:\nTờ trình số 9047/TTr-SXD về việc quy hoạch\n"
+        parser = MeetingParserAgent(
+            ai_extractor=_FakeAIExtractorWithNumbers(["9047/TTr-SXD", "9999/TTr-GHOST"])
+        )
+
+        with self.assertLogs("agents.meeting_parser", level="WARNING") as logs:
+            meeting = parser.parse(text)
+
+        by_number = {d.number: d for d in meeting.documents}
+        self.assertEqual(by_number["9047/TTr-SXD"].agenda_item_index, 1)
+        self.assertIsNone(by_number["9999/TTr-GHOST"].agenda_item_index)
+        self.assertTrue(any("9999/TTr-GHOST" in message for message in logs.output))
+
+    def test_no_agenda_items_leaves_every_document_unassigned_and_logs_warning(self) -> None:
+        text = "Kính gửi: ...\nTờ trình số 9047/TTr-SXD về việc quy hoạch\n"
+        parser = MeetingParserAgent(ai_extractor=_FakeAIExtractorWithNumbers(["9047/TTr-SXD"]))
+
+        with self.assertLogs("agents.meeting_parser", level="WARNING") as logs:
+            meeting = parser.parse(text)
+
+        self.assertIsNone(meeting.documents[0].agenda_item_index)
+        self.assertTrue(any("No agenda items" in message for message in logs.output))
+
+    def test_document_referenced_before_the_first_nd_heading_stays_unassigned(self) -> None:
+        # A document mentioned in a preamble, before any "N. <agency> trình:"
+        # line, has no ND block before it — must not be guessed into ND01.
+        text = (
+            "Kèm theo Tờ trình số 9047/TTr-SXD\n"
+            "\n"
+            "1. Sở Xây dựng trình:\n"
+            "Tờ trình số 8232/TTr-SNV về việc quy hoạch\n"
+        )
+        parser = MeetingParserAgent(
+            ai_extractor=_FakeAIExtractorWithNumbers(["9047/TTr-SXD", "8232/TTr-SNV"])
+        )
+
+        meeting = parser.parse(text)
+
+        by_number = {d.number: d for d in meeting.documents}
+        self.assertIsNone(by_number["9047/TTr-SXD"].agenda_item_index)
+        self.assertEqual(by_number["8232/TTr-SNV"].agenda_item_index, 1)
 
 
 if __name__ == "__main__":

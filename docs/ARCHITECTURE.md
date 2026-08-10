@@ -29,7 +29,7 @@ A single meeting invitation flows through the pipeline as one `Meeting`
 object, enriched at each stage:
 
 ```
-InvitationReader -> MeetingParserAgent -> VBSearchAgent -> DownloadAgent -> ReviewAgent -> ProposalAgent -> ExportAgent
+InvitationReader -> MeetingParserAgent -> VBSearchAgent -> DownloadAgent -> NormalizationAgent -> ReviewAgent -> ProposalAgent -> ExportAgent
 ```
 
 1. **`parser/invitation_reader.py` (`InvitationReader`)** reads the raw
@@ -46,10 +46,13 @@ InvitationReader -> MeetingParserAgent -> VBSearchAgent -> DownloadAgent -> Revi
 4. **`DownloadAgent`** downloads every resolved attachment, updating
    `MeetingDocument.downloaded` and `MeetingDocument.local_path` on the
    same `Meeting` object.
-5. **`ReviewAgent`** uses AI to summarize each downloaded document.
-6. **`ProposalAgent`** uses AI to draft advisory proposals from the
+5. **`NormalizationAgent`** groups downloaded documents by agenda item
+   (ND, via `MeetingDocument.agenda_item_index`), bundling each group
+   into a `NDxx.zip` + `NDxx.meta.json` pair, ready for AI review.
+6. **`ReviewAgent`** uses AI to summarize each downloaded document.
+7. **`ProposalAgent`** uses AI to draft advisory proposals from the
    reviewed documents.
-7. **`ExportAgent`** generates the final Word advisory report from the
+8. **`ExportAgent`** generates the final Word advisory report from the
    fully enriched `Meeting` object.
 
 The `Meeting` object (`models/meeting.py`) is the single artifact passed
@@ -112,6 +115,19 @@ behavioral rules. Implementation status is tracked separately, in
 - Download attachments.
 - Update `MeetingDocument` status.
 - Never search documents.
+
+### NormalizationAgent
+**Module:** `agents/normalization.py`
+- Group downloaded `MeetingDocument`s by agenda item (ND), using
+  `MeetingDocument.agenda_item_index`.
+- Bundle each group into `NDxx.zip` + write `NDxx.meta.json`.
+- Identify the Tờ trình file by filename only, never by content;
+  fewest-bytes-on-disk PDF/DOCX as fallback — never by page count.
+- Documents whose ND couldn't be determined are grouped separately,
+  never silently dropped.
+- Never reads PDF/DOCX content — that stays `InvitationReader`'s
+  exclusive job.
+- Never searches VBĐH, never performs AI analysis.
 
 ### ReviewAgent
 **Module:** `ai/review.py`
