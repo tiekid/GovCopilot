@@ -1,4 +1,10 @@
-"""Agent that extracts referenced document numbers from meeting invitation text."""
+"""Legacy regex-based document-number extractor.
+
+No longer the authoritative source for Meeting.documents — that role
+now belongs to ai.invitation_extractor.AIInvitationExtractor, which
+MeetingParserAgent uses instead. Kept for comparing regex vs. AI
+extraction quality, benchmarking, and as a potential future fallback.
+"""
 
 import logging
 import re
@@ -18,7 +24,11 @@ _DOCUMENT_TYPE_PATTERNS: Tuple[Tuple[str, Pattern[str]], ...] = (
 
 
 class DocumentExtractorAgent:
-    """Extracts every referenced document number from meeting invitation text."""
+    """Extracts every referenced document number from meeting invitation text.
+
+    Legacy: kept for comparison/benchmarking against AI-based
+    extraction. Not used by MeetingParserAgent.
+    """
 
     def extract(self, text: str) -> List[MeetingDocument]:
 
