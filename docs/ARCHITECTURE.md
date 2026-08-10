@@ -49,7 +49,8 @@ InvitationReader -> MeetingParserAgent -> VBSearchAgent -> DownloadAgent -> Norm
 5. **`NormalizationAgent`** groups downloaded documents by agenda item
    (ND, via `MeetingDocument.agenda_item_index`), bundling each group
    into a `NDxx.zip` + `NDxx.meta.json` pair, ready for AI review.
-6. **`ReviewAgent`** uses AI to summarize each downloaded document.
+6. **`ReviewAgent`** collects externally-produced AI review results
+   (`NDxx.review.md`) — performs no AI analysis itself.
 7. **`ProposalAgent`** uses AI to draft advisory proposals from the
    reviewed documents.
 8. **`ExportAgent`** generates the final Word advisory report from the
@@ -131,8 +132,16 @@ behavioral rules. Implementation status is tracked separately, in
 
 ### ReviewAgent
 **Module:** `ai/review.py`
-- AI review of downloaded documents.
-- Generate structured summaries.
+- Collect AI review results produced *outside* this codebase — a human
+  runs each `NDxx.zip` bundle through ChatGPT web via a Cowork session
+  (manual/semi-automated, deliberately outside Python app control) and
+  saves the result as `NDxx.review.md` in the reviews directory.
+- For each `NormalizedAgendaGroup`, read the matching
+  `NDxx.review.md` if it exists; otherwise report the group as not yet
+  reviewed.
+- Never calls an AI provider. Never touches Playwright or a browser.
+- A missing review file is a normal, expected mid-workflow state, not
+  an error — logged at INFO, never WARNING.
 
 ### ProposalAgent
 **Module:** `ai/proposal.py`
@@ -155,6 +164,11 @@ behavioral rules. Implementation status is tracked separately, in
 - **One `Meeting` object per pipeline run.** Each stage receives and
   returns (or mutates) the same `Meeting` instance — no stage constructs a
   parallel, divergent representation of the same data.
+- **`ReviewAgent` never calls an AI provider or a browser.** The ChatGPT
+  interaction happens outside this codebase (a Cowork session), by
+  deliberate architecture decision — avoids the ToS risk of automating
+  the ChatGPT web UI (see the design discussion this decision came
+  from).
 
 ## Architectural governance
 

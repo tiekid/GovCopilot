@@ -15,6 +15,7 @@ from agents.download import DownloadAgent
 from agents.meeting_parser import MeetingParserAgent
 from agents.normalization import NormalizationAgent, NormalizedAgendaGroup
 from agents.vb_search import VBSearchAgent
+from ai.review import ReviewAgent, ReviewedAgendaGroup
 from models.meeting import Meeting
 from parser.invitation_reader import read_invitation as _read_invitation_file
 
@@ -35,19 +36,23 @@ class DocumentPipeline:
         vb_search_agent: Optional[VBSearchAgent] = None,
         download_agent: Optional[DownloadAgent] = None,
         normalization_agent: Optional[NormalizationAgent] = None,
+        review_agent: Optional[ReviewAgent] = None,
         read_invitation: Callable[[str], str] = _read_invitation_file,
     ) -> None:
-        # vb_search_agent/download_agent/normalization_agent are optional
-        # because parse() doesn't need them — they depend on an open
-        # BrowserSession (search/download) or on documents already being
-        # downloaded (normalization), neither of which a caller may have
-        # yet at parse time (see Bug 1 in docs/09_LESSONS_LEARNED.md).
-        # process_documents() and normalize_documents() each require
-        # their own agent(s) and raise clearly if missing.
+        # vb_search_agent/download_agent/normalization_agent/review_agent
+        # are optional because parse() doesn't need them — they depend on
+        # an open BrowserSession (search/download), on documents already
+        # being downloaded (normalization), or on normalized groups
+        # already existing (review), none of which a caller may have yet
+        # at parse time (see Bug 1 in docs/09_LESSONS_LEARNED.md).
+        # process_documents(), normalize_documents(), and
+        # collect_reviews() each require their own agent(s) and raise
+        # clearly if missing.
         self._meeting_parser = meeting_parser
         self._vb_search_agent = vb_search_agent
         self._download_agent = download_agent
         self._normalization_agent = normalization_agent
+        self._review_agent = review_agent
         self._read_invitation = read_invitation
 
     def run(
@@ -215,3 +220,43 @@ class DocumentPipeline:
         )
 
         return groups
+
+    def collect_reviews(
+        self,
+        groups: List[NormalizedAgendaGroup],
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> List[ReviewedAgendaGroup]:
+        """Read back externally-produced AI review results (NDxx.review.md)
+        for each normalized agenda group.
+
+        ReviewAgent performs no AI analysis itself — the ChatGPT review
+        happens outside this codebase (Cowork). A group with no review
+        file yet is a normal, expected mid-workflow state, not an error.
+        """
+
+        if self._review_agent is None:
+            raise RuntimeError(
+                "DocumentPipeline.collect_reviews() requires review_agent "
+                "(construct DocumentPipeline with one, or call "
+                "normalize_documents() only until it's available)."
+            )
+
+        def report(message: str) -> None:
+            logger.info(message)
+            if progress_callback is not None:
+                progress_callback(message)
+
+        report("Collecting reviews...")
+
+        reviewed_groups = self._review_agent.collect(groups)
+
+        reviewed_count = sum(1 for r in reviewed_groups if r.reviewed)
+        report(f"Reviews collected: {reviewed_count}/{len(reviewed_groups)} agenda group(s).")
+
+        logger.info(
+            "Review collection complete: %d/%d agenda group(s) reviewed",
+            reviewed_count,
+            len(reviewed_groups),
+        )
+
+        return reviewed_groups

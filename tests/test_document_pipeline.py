@@ -79,6 +79,21 @@ class _FakeNormalizationAgent:
         return [_FakeNormalizedGroup(ma_nd="ND01")]
 
 
+@dataclass
+class _FakeReviewedGroup:
+    ma_nd: str
+    reviewed: bool
+
+
+class _FakeReviewAgent:
+    def __init__(self) -> None:
+        self.calls: List[List[_FakeNormalizedGroup]] = []
+
+    def collect(self, groups: List[_FakeNormalizedGroup]) -> List[_FakeReviewedGroup]:
+        self.calls.append(groups)
+        return [_FakeReviewedGroup(ma_nd=g.ma_nd, reviewed=False) for g in groups]
+
+
 def _read_invitation_stub(_path: str) -> str:
     return "invitation text"
 
@@ -202,6 +217,47 @@ class DocumentPipelineSplitTests(unittest.TestCase):
 
         self.assertIn("Normalizing documents...", messages)
         self.assertTrue(any("1 agenda group" in m for m in messages))
+
+    def test_collect_reviews_raises_clearly_when_agent_missing(self) -> None:
+        pipeline = DocumentPipeline(
+            meeting_parser=self.meeting_parser,
+            read_invitation=_read_invitation_stub,
+        )
+
+        with self.assertRaises(RuntimeError):
+            pipeline.collect_reviews([_FakeNormalizedGroup(ma_nd="ND01")])
+
+    def test_collect_reviews_calls_review_agent(self) -> None:
+        review_agent = _FakeReviewAgent()
+        groups = [_FakeNormalizedGroup(ma_nd="ND01")]
+
+        pipeline = DocumentPipeline(
+            meeting_parser=self.meeting_parser,
+            review_agent=review_agent,
+            read_invitation=_read_invitation_stub,
+        )
+
+        results = pipeline.collect_reviews(groups)
+
+        self.assertEqual(review_agent.calls, [groups])
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].ma_nd, "ND01")
+
+    def test_collect_reviews_reports_progress(self) -> None:
+        review_agent = _FakeReviewAgent()
+        groups = [_FakeNormalizedGroup(ma_nd="ND01")]
+
+        pipeline = DocumentPipeline(
+            meeting_parser=self.meeting_parser,
+            review_agent=review_agent,
+            read_invitation=_read_invitation_stub,
+        )
+
+        messages: List[str] = []
+        pipeline.collect_reviews(groups, progress_callback=messages.append)
+
+        self.assertIn("Collecting reviews...", messages)
+        self.assertTrue(any("0/1 agenda group" in m for m in messages))
 
 
 if __name__ == "__main__":
