@@ -9,10 +9,11 @@ selectors).
 """
 
 import logging
-from typing import Callable, Optional
+from typing import Callable, List, Optional
 
 from agents.download import DownloadAgent
 from agents.meeting_parser import MeetingParserAgent
+from agents.normalization import NormalizationAgent, NormalizedAgendaGroup
 from agents.vb_search import VBSearchAgent
 from models.meeting import Meeting
 from parser.invitation_reader import read_invitation as _read_invitation_file
@@ -33,16 +34,20 @@ class DocumentPipeline:
         meeting_parser: MeetingParserAgent,
         vb_search_agent: Optional[VBSearchAgent] = None,
         download_agent: Optional[DownloadAgent] = None,
+        normalization_agent: Optional[NormalizationAgent] = None,
         read_invitation: Callable[[str], str] = _read_invitation_file,
     ) -> None:
-        # vb_search_agent/download_agent are optional because parse()
-        # doesn't need them — they depend on an open BrowserSession,
-        # which a caller may not have yet at parse time (see Bug 1 in
-        # docs/09_LESSONS_LEARNED.md). process_documents() requires
-        # both and raises clearly if either is missing.
+        # vb_search_agent/download_agent/normalization_agent are optional
+        # because parse() doesn't need them — they depend on an open
+        # BrowserSession (search/download) or on documents already being
+        # downloaded (normalization), neither of which a caller may have
+        # yet at parse time (see Bug 1 in docs/09_LESSONS_LEARNED.md).
+        # process_documents() and normalize_documents() each require
+        # their own agent(s) and raise clearly if missing.
         self._meeting_parser = meeting_parser
         self._vb_search_agent = vb_search_agent
         self._download_agent = download_agent
+        self._normalization_agent = normalization_agent
         self._read_invitation = read_invitation
 
     def run(
@@ -173,3 +178,40 @@ class DocumentPipeline:
         )
 
         return meeting
+
+    def normalize_documents(
+        self,
+        meeting: Meeting,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> List[NormalizedAgendaGroup]:
+        """Group downloaded documents by agenda item (ND) and bundle each
+        into NDxx.zip + NDxx.meta.json, ready for AI review.
+
+        Unchanged NormalizationAgent behavior, only now callable as a
+        pipeline step on an already-downloaded Meeting.
+        """
+
+        if self._normalization_agent is None:
+            raise RuntimeError(
+                "DocumentPipeline.normalize_documents() requires "
+                "normalization_agent (construct DocumentPipeline with one, "
+                "or call process_documents() only until it's available)."
+            )
+
+        def report(message: str) -> None:
+            logger.info(message)
+            if progress_callback is not None:
+                progress_callback(message)
+
+        report("Normalizing documents...")
+
+        groups = self._normalization_agent.normalize(meeting)
+
+        report(f"Normalized into {len(groups)} agenda group(s).")
+
+        logger.info(
+            "Document normalization complete: %d agenda group(s) produced",
+            len(groups),
+        )
+
+        return groups

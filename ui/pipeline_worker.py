@@ -23,6 +23,7 @@ from PySide6.QtCore import QObject, Signal
 
 from agents.download import DownloadAgent
 from agents.meeting_parser import MeetingParserAgent
+from agents.normalization import NormalizationAgent
 from agents.vb_search import VBSearchAgent
 from browser.login import BrowserSession, SessionState
 from pipeline.document_pipeline import DocumentPipeline
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DOWNLOAD_DIR = _PROJECT_ROOT / "documents"
+NORMALIZED_DIR = DOWNLOAD_DIR / "normalized"
 
 
 class PipelineWorker(QObject):
@@ -97,6 +99,7 @@ class PipelineWorker(QObject):
             # the same document once if the attachment section doesn't
             # render on the first open — see docs/09_LESSONS_LEARNED.md.
             download_agent = DownloadAgent(browser_session, self._download_dir, vb_search_agent)
+            normalization_agent = NormalizationAgent(output_dir=NORMALIZED_DIR)
 
             logger.info("+%.1f Session verified", time.perf_counter() - t0)
 
@@ -113,9 +116,15 @@ class PipelineWorker(QObject):
                 meeting_parser=meeting_parser,
                 vb_search_agent=vb_search_agent,
                 download_agent=download_agent,
+                normalization_agent=normalization_agent,
             )
 
             meeting = pipeline.process_documents(meeting, progress_callback=report_with_timing)
+
+            # Return value (List[NormalizedAgendaGroup]) isn't consumed
+            # yet — no ReviewAgent exists to receive it. finished still
+            # carries the Meeting object, unchanged.
+            pipeline.normalize_documents(meeting, progress_callback=report_with_timing)
 
             self.finished.emit(meeting)
 

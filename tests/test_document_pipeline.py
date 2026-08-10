@@ -65,6 +65,20 @@ class _FakeDownloadAgent:
         return _FakeDownloadResult(document=document, success=True)
 
 
+@dataclass
+class _FakeNormalizedGroup:
+    ma_nd: str
+
+
+class _FakeNormalizationAgent:
+    def __init__(self) -> None:
+        self.calls: int = 0
+
+    def normalize(self, meeting: Meeting) -> List[_FakeNormalizedGroup]:
+        self.calls += 1
+        return [_FakeNormalizedGroup(ma_nd="ND01")]
+
+
 def _read_invitation_stub(_path: str) -> str:
     return "invitation text"
 
@@ -149,6 +163,45 @@ class DocumentPipelineSplitTests(unittest.TestCase):
         self.assertIs(result, self.meeting)
         self.assertEqual(vb_search_agent.calls, ["1234/TTr-XYZ"])
         self.assertEqual(download_agent.calls, ["1234/TTr-XYZ"])
+
+    def test_normalize_documents_raises_clearly_when_agent_missing(self) -> None:
+        pipeline = DocumentPipeline(
+            meeting_parser=self.meeting_parser,
+            read_invitation=_read_invitation_stub,
+        )
+
+        with self.assertRaises(RuntimeError):
+            pipeline.normalize_documents(self.meeting)
+
+    def test_normalize_documents_calls_normalization_agent(self) -> None:
+        normalization_agent = _FakeNormalizationAgent()
+
+        pipeline = DocumentPipeline(
+            meeting_parser=self.meeting_parser,
+            normalization_agent=normalization_agent,
+            read_invitation=_read_invitation_stub,
+        )
+
+        groups = pipeline.normalize_documents(self.meeting)
+
+        self.assertEqual(normalization_agent.calls, 1)
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0].ma_nd, "ND01")
+
+    def test_normalize_documents_reports_progress(self) -> None:
+        normalization_agent = _FakeNormalizationAgent()
+
+        pipeline = DocumentPipeline(
+            meeting_parser=self.meeting_parser,
+            normalization_agent=normalization_agent,
+            read_invitation=_read_invitation_stub,
+        )
+
+        messages: List[str] = []
+        pipeline.normalize_documents(self.meeting, progress_callback=messages.append)
+
+        self.assertIn("Normalizing documents...", messages)
+        self.assertTrue(any("1 agenda group" in m for m in messages))
 
 
 if __name__ == "__main__":
