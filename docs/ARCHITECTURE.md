@@ -39,10 +39,10 @@ InvitationReader -> MeetingParserAgent -> VBSearchAgent -> DownloadAgent -> Revi
    returns a structured `Meeting` object: title, chairman, date, time,
    location, participants, agenda items, and every referenced document
    number (via `DocumentExtractorAgent`).
-3. **`VBSearchAgent`** takes the `Meeting` object, logs into VBĐH
-   (`browser/login.py`), and searches for each document in
-   `Meeting.documents`, resolving each `MeetingDocument` to a downloadable
-   attachment.
+3. **`VBSearchAgent`** takes the `Meeting` object, uses `BrowserSession`
+   (`browser/login.py`) to access the browser session — handling login
+   when required — and searches for each document in `Meeting.documents`,
+   resolving each `MeetingDocument` to a downloadable attachment.
 4. **`DownloadAgent`** downloads every resolved attachment, updating
    `MeetingDocument.downloaded` and `MeetingDocument.local_path` on the
    same `Meeting` object.
@@ -79,12 +79,18 @@ behavioral rules. Implementation status is tracked separately, in
 
 ### BrowserSession
 **Module:** `browser/login.py`
-- Open the persistent Playwright browser.
-- Manage the browser lifecycle.
+- Launch the persistent Playwright browser.
+- Reuse the persistent profile.
 - Navigate to VB_URL.
-- Return the active page.
-- Never contain business logic.
-- Never determine authentication state.
+- Expose the Playwright Page.
+- Wait until the page is ready for further interaction (e.g. page load
+  completion), and report observable session state (e.g. whether the
+  persistent profile is already authenticated, whether the login page
+  is still visible) — reporting only.
+- Never decide what workflow should happen next.
+- Never search documents.
+- Never perform login.
+- Never determine business logic.
 
 ### MeetingParserAgent
 **Module:** `agents/meeting_parser.py`
