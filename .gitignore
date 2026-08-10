@@ -32,3 +32,8 @@ build/
 
 # Windows
 Thumbs.db
+
+# Runtime artifacts
+documents/
+discovery/
+.claude/*.lock
