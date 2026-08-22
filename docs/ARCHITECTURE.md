@@ -29,12 +29,14 @@ A single meeting invitation flows through the pipeline as one `Meeting`
 object, enriched at each stage:
 
 ```
-InvitationReader -> MeetingParserAgent -> VBSearchAgent -> DownloadAgent -> NormalizationAgent -> ReviewAgent -> ProposalAgent -> ExportAgent
+InvitationReader -> MeetingParserAgent -> VBSearchAgent -> DownloadAgent -> NormalizationAgent -> NDContentExtractor -> ReviewAgent -> ProposalAgent -> ExportAgent
 ```
 
 1. **`parser/invitation_reader.py` (`InvitationReader`)** reads the raw
    PDF/DOCX invitation file and returns plain text. This is the **only**
-   place in the codebase allowed to read PDF/DOCX files.
+   PDF/DOCX parsing implementation in the codebase — other components
+   needing a file's text (e.g. `NDContentExtractor`) call its functions
+   directly rather than re-implementing parsing.
 2. **`MeetingParserAgent`** (`agents/meeting_parser.py`) takes that text and
    returns a structured `Meeting` object: title, chairman, date, time,
    location, participants, agenda items, and every referenced document
@@ -54,11 +56,17 @@ InvitationReader -> MeetingParserAgent -> VBSearchAgent -> DownloadAgent -> Norm
 5. **`NormalizationAgent`** groups downloaded documents by agenda item
    (ND, via `MeetingDocument.agenda_item_index`), bundling each group
    into a `NDxx.zip` + `NDxx.meta.json` pair, ready for AI review.
-6. **`ReviewAgent`** collects externally-produced AI review results
+6. **`NDContentExtractor`** (`ai/nd_extractor.py`) reads each
+   `NDxx.zip`/`NDxx.meta.json` bundle and asks Gemini (via `AIProvider`)
+   to extract its content faithfully — no summarizing, no analysis —
+   saved as `NDxx.extract.md`. Only NDs where every file has a real
+   text layer are processed; a scanned/unsupported/empty file skips
+   that whole ND (logged, never a crash). See ADR-012.
+7. **`ReviewAgent`** collects externally-produced AI review results
    (`NDxx.review.md`) — performs no AI analysis itself.
-7. **`ProposalAgent`** uses AI to draft advisory proposals from the
+8. **`ProposalAgent`** uses AI to draft advisory proposals from the
    reviewed documents.
-8. **`ExportAgent`** generates the final Word advisory report from the
+9. **`ExportAgent`** generates the final Word advisory report from the
    fully enriched `Meeting` object.
 
 The `Meeting` object (`models/meeting.py`) is the single artifact passed
@@ -78,7 +86,9 @@ behavioral rules. Implementation status is tracked separately, in
 ### InvitationReader
 **Module:** `parser/invitation_reader.py`
 - Read PDF/DOCX, return plain text.
-- The only PDF/DOCX reader in the codebase.
+- The only PDF/DOCX *parsing implementation* in the codebase — other
+  components call its functions (`read_pdf`/`read_docx`/`read_invitation`)
+  directly rather than re-implementing parsing themselves.
 
 ### DocumentExtractorAgent
 **Module:** `agents/document_extractor.py`
@@ -146,6 +156,23 @@ behavioral rules. Implementation status is tracked separately, in
   exclusive job.
 - Never searches VBĐH, never performs AI analysis.
 
+### NDContentExtractor
+**Module:** `ai/nd_extractor.py`
+- For each `NormalizedAgendaGroup`, read its `NDxx.zip`'s real file
+  list (never `NDxx.meta.json`'s `danh_sach_file`, which can drift from
+  the zip's actual contents) and extract every file's text via
+  `parser/invitation_reader.read_invitation()` — the only PDF/DOCX
+  parsing implementation in the codebase (see `InvitationReader` above).
+- Ask Gemini (via `AIProvider`/`ProviderFactory`, same as
+  `AIInvitationExtractor`) to extract that content faithfully — no
+  summarizing, no analysis, no opinion — saved as `NDxx.extract.md`.
+  Does zero response parsing: the raw text *is* the output.
+- A scanned PDF (no extractable text), an unsupported file type, or a
+  missing/empty bundle skips that ND entirely — per-ND, all-or-nothing,
+  logged, never a crash and never a partial extraction. See ADR-012.
+- Never performs the second-tier 6-section analysis — that stays
+  outside the codebase, per `ReviewAgent`'s contract below, unchanged.
+
 ### ReviewAgent
 **Module:** `ai/review.py`
 - Collect AI review results produced *outside* this codebase — a human
@@ -174,9 +201,15 @@ behavioral rules. Implementation status is tracked separately, in
 - **UI coordinates only.** `ui/main_window.py` may call agents and render
   their output; it must not parse text, call Playwright, or call the
   OpenAI API directly.
-- **Agents never read PDF/DOCX directly.** Only `parser/invitation_reader.py`
-  touches file formats. Every agent downstream of it operates on the
-  `Meeting` object or plain text already extracted from it.
+- **No agent implements its own PDF/DOCX parsing.** All PDF/DOCX-to-text
+  conversion lives in exactly one module, `parser/invitation_reader.py`
+  (`read_pdf`/`read_docx`/`read_invitation`) — any component needing a
+  file's text calls these functions rather than writing its own parser.
+  `MeetingParserAgent` calls it once per invitation, upfront;
+  `NDContentExtractor` (`ai/nd_extractor.py`) calls it per file inside
+  an already-downloaded `NDxx.zip` bundle. Both are legitimate callers
+  of the same shared module — the rule is "one parsing implementation,"
+  not "one caller."
 - **One `Meeting` object per pipeline run.** Each stage receives and
   returns (or mutates) the same `Meeting` instance — no stage constructs a
   parallel, divergent representation of the same data.

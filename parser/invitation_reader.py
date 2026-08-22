@@ -45,4 +45,23 @@ def read_docx(path: Path):
         if p.text.strip():
             text.append(p.text)
 
+    # Table cell text lives in doc.tables, never in doc.paragraphs —
+    # confirmed against a real DOCX (742 paragraphs, 27 tables with
+    # real data) where table content was silently missing entirely.
+    # Appended after all paragraph text (not interleaved back into its
+    # original position — acceptable for faithful content extraction,
+    # not document-layout reconstruction), each table fenced with a
+    # "[Bảng N]" marker so it reads as table data, not prose.
+    for table_index, table in enumerate(doc.tables, start=1):
+
+        rows = []
+
+        for row in table.rows:
+            cells = [cell.text.strip() for cell in row.cells]
+            if any(cells):
+                rows.append(" | ".join(cells))
+
+        if rows:
+            text.append("\n".join([f"[Bảng {table_index}]", *rows]))
+
     return "\n".join(text)
