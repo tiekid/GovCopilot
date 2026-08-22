@@ -9,6 +9,12 @@ VB_URL = os.getenv("VB_URL", "")
 USERNAME = os.getenv("USERNAME", "")
 PASSWORD = os.getenv("PASSWORD", "")
 
+# API key restricted to the Google Drive API (no OAuth) — backs
+# DownloadAgent.download_from_drive() / agents/drive_client.py. Confirmed
+# working against a real "Anyone with the link" shared folder; see
+# scripts/test_drive_api_v3.py.
+GOOGLE_DRIVE_API_KEY = os.getenv("GOOGLE_DRIVE_API_KEY", "")
+
 # Multi-provider AI configuration. AIInvitationExtractor never reads any
 # of this directly — only providers/provider_factory.py does, selecting
 # one concrete AIProvider by AI_PROVIDER. Everything above AIProvider

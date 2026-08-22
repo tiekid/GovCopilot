@@ -45,7 +45,12 @@ InvitationReader -> MeetingParserAgent -> VBSearchAgent -> DownloadAgent -> Norm
    resolving each `MeetingDocument` to a downloadable attachment.
 4. **`DownloadAgent`** downloads every resolved attachment, updating
    `MeetingDocument.downloaded` and `MeetingDocument.local_path` on the
-   same `Meeting` object.
+   same `Meeting` object. Two independent download paths, same
+   contract: `download()` (VBĐH, via an already-open Playwright dialog)
+   and `download_from_drive()` (a shared Google Drive folder, via
+   `agents/drive_client.py` — API key only, no OAuth). Which path runs
+   for a given document, and how a Drive folder ID is resolved for it,
+   is not yet wired into this pipeline stage — see ADR-011.
 5. **`NormalizationAgent`** groups downloaded documents by agenda item
    (ND, via `MeetingDocument.agenda_item_index`), bundling each group
    into a `NDxx.zip` + `NDxx.meta.json` pair, ready for AI review.
@@ -112,10 +117,21 @@ behavioral rules. Implementation status is tracked separately, in
 - Reuse `BrowserSession`.
 
 ### DownloadAgent
-**Module:** `agents/`
-- Download attachments.
-- Update `MeetingDocument` status.
-- Never search documents.
+**Module:** `agents/download.py`
+- Download attachments, from either VBĐH (`download()`) or a shared
+  Google Drive folder (`download_from_drive()`).
+- Update `MeetingDocument` status — both paths mutate
+  `MeetingDocument.downloaded`/`local_path` identically, so downstream
+  agents never need to know which source a document came from.
+- Never search documents, VBĐH or Drive: `download_from_drive()` takes
+  an already-resolved Drive folder ID; it doesn't decide which folder
+  a document belongs to.
+- Drive HTTP transport lives in `agents/drive_client.py`
+  (`list_folder`/`download_binary`/`export_native_file`, plus
+  `DriveApiError`/`DriveForbiddenError`/`DriveNetworkError`) —
+  transport-only, same provider/consumer split as `providers/` for AI.
+  `DownloadAgent` owns all folder-traversal and document-matching
+  decisions; `drive_client` never does. See ADR-011.
 
 ### NormalizationAgent
 **Module:** `agents/normalization.py`

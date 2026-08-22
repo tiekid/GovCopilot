@@ -43,6 +43,17 @@ Root cause, confirmed by real evidence (docs/09_LESSONS_LEARNED.md):
   hidden on every exit path via a single `finally`-block call (see
   _ensure_dialog_closed), instead of individual close calls scattered
   across specific branches.
+
+Also exposes download_from_drive() — a second, independent download
+path for documents whose source is a shared Google Drive folder rather
+than VBĐH. It shares no Playwright state with download() (no browser
+session, no dialog) and uses agents/drive_client.py for all Drive HTTP
+calls; DownloadAgent itself owns the folder-traversal and
+document-matching decisions (drive_client stays transport-only, same
+split as providers/ for AI). Both paths return the same DownloadResult
+and mutate MeetingDocument identically, so callers downstream
+(NormalizationAgent, the pipeline) don't need to know which source a
+document came from.
 """
 
 import json
@@ -55,6 +66,8 @@ from typing import TYPE_CHECKING, Callable, List, Optional
 from playwright.sync_api import Page, Response
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
+import config
+from agents import drive_client
 from browser.login import BrowserSession
 from models.document import MeetingDocument
 
@@ -121,6 +134,17 @@ _INCOMPLETE_DIALOG_MESSAGE = (
     "Detail dialog was incomplete (attachment table or download control not ready)."
 )
 
+# Drive path — unrelated to the VBĐH dialog constants above.
+_DRIVE_MISSING_API_KEY_MESSAGE = "Google Drive API key is not configured (GOOGLE_DRIVE_API_KEY)."
+
+# The only pattern confirmed by real evidence so far (scripts/test_drive_api_v3.py,
+# docs/GovCopilot-v2-kien-truc.md): a document number like "9414/TTr-SXD"
+# and its Drive file "9414_TTr-SXD_...pdf" share the same leading digit
+# sequence. Anchored to the start of the string deliberately — a number
+# embedded mid-string elsewhere in a filename would be a coincidence,
+# not a real match.
+_DRIVE_NUMBER_PREFIX_PATTERN = re.compile(r"\d+")
+
 
 @dataclass
 class DownloadDiagnostics:
@@ -168,13 +192,17 @@ class DownloadResult:
 
 
 class DownloadAgent:
-    """Downloads the attachment for an already-opened VBĐH document.
+    """Downloads a document's attachment from VBĐH or from Google Drive.
 
-    Never performs a fresh search and never performs AI analysis. When
-    the attachment section looks incomplete, it closes the dialog and
-    reopens the same document exactly once, via the optional
-    `vb_search_agent` collaborator — the only VBSearchAgent capability
-    it reuses, and only for that one step.
+    download() never performs a fresh search and never performs AI
+    analysis. When the attachment section looks incomplete, it closes
+    the dialog and reopens the same document exactly once, via the
+    optional `vb_search_agent` collaborator — the only VBSearchAgent
+    capability it reuses, and only for that one step.
+
+    download_from_drive() is a separate, Playwright-independent path
+    for documents sourced from a shared Google Drive folder — see the
+    module docstring.
     """
 
     def __init__(
@@ -182,10 +210,16 @@ class DownloadAgent:
         browser_session: BrowserSession,
         download_dir: Path,
         vb_search_agent: Optional["VBSearchAgent"] = None,
+        drive_api_key: Optional[str] = None,
     ) -> None:
         self._browser_session = browser_session
         self._download_dir = download_dir
         self._vb_search_agent = vb_search_agent
+
+        # Reads config.* at call time (not import time), same reasoning
+        # as GeminiProvider.__init__ — a runtime config change takes
+        # effect on the next DownloadAgent construction, no restart.
+        self._drive_api_key = drive_api_key if drive_api_key is not None else config.GOOGLE_DRIVE_API_KEY
 
     def download(
         self,
@@ -527,3 +561,196 @@ class DownloadAgent:
         sanitized = re.sub(r'[\\/:*?"<>|]', "_", document_number).strip()
 
         return sanitized or "unknown"
+
+    # ------------------------------------------------------------------
+    # Google Drive path — independent of everything above (no
+    # Playwright, no dialog, no VBSearchAgent). See module docstring.
+    # ------------------------------------------------------------------
+
+    def download_from_drive(
+        self,
+        document: MeetingDocument,
+        folder_id: str,
+        progress_callback: Optional[Callable[[str], None]] = None,
+    ) -> DownloadResult:
+        """Download `document`'s attachment from a shared Google Drive folder.
+
+        `folder_id` may be either an ND subfolder that already contains
+        files directly (the case confirmed by real evidence), or a
+        parent meeting folder whose direct children are ND subfolders —
+        both shapes are listed and reconciled by
+        _list_drive_folder_recursive, exactly one level deep. Which
+        folder_id to pass (and matching an ND subfolder to
+        MeetingDocument.agenda_item_index) is the caller's
+        responsibility — not yet resolved anywhere in this pipeline,
+        see docs/GovCopilot-v2-kien-truc.md and the plan this method
+        was implemented from.
+
+        Mutates `document` and returns DownloadResult identically to
+        download() on success — callers never need to know which
+        source a document came from.
+        """
+
+        def report(message: str) -> None:
+            logger.info(message)
+            if progress_callback is not None:
+                progress_callback(message)
+
+        if not self._drive_api_key:
+            logger.error(
+                "Cannot download document number %s from Drive: no API key configured",
+                document.number,
+            )
+            return DownloadResult(
+                document=document, success=False, local_path=None, error=_DRIVE_MISSING_API_KEY_MESSAGE
+            )
+
+        logger.info("Downloading document number %s from Drive folder %s", document.number, folder_id)
+
+        try:
+            self._download_dir.mkdir(parents=True, exist_ok=True)
+
+            files = self._list_drive_folder_recursive(folder_id, document.number)
+            matches = self._match_drive_files(document.number, files)
+
+            if not matches:
+                message = (
+                    f"No file matching document number '{document.number}' "
+                    f"found in Drive folder '{folder_id}'."
+                )
+                logger.warning(message)
+                return DownloadResult(document=document, success=False, local_path=None, error=message)
+
+            if len(matches) > 1:
+                message = (
+                    f"Multiple files matched document number '{document.number}' "
+                    f"in Drive folder '{folder_id}': {', '.join(m.name for m in matches)}."
+                )
+                logger.warning(message)
+                return DownloadResult(document=document, success=False, local_path=None, error=message)
+
+            file_entry = matches[0]
+            report(f"Downloading '{file_entry.name}' from Drive...")
+
+            saved_path = self._save_drive_file(file_entry)
+
+            document.downloaded = True
+            document.local_path = str(saved_path)
+
+            logger.info("Saved document number %s to %s (from Drive)", document.number, saved_path)
+
+            return DownloadResult(document=document, success=True, local_path=str(saved_path), error=None)
+
+        except drive_client.DriveForbiddenError as exc:
+            logger.error("Drive permission denied for document number %s: %s", document.number, exc)
+            return DownloadResult(
+                document=document, success=False, local_path=None, error=f"[Drive permission denied] {exc}"
+            )
+
+        except drive_client.DriveNetworkError as exc:
+            logger.warning("Drive network error for document number %s: %s", document.number, exc)
+            return DownloadResult(
+                document=document, success=False, local_path=None, error=f"[Drive network error] {exc}"
+            )
+
+        except drive_client.DriveApiError as exc:
+            logger.error("Drive API error for document number %s: %s", document.number, exc)
+            return DownloadResult(
+                document=document, success=False, local_path=None, error=f"[Drive API error] {exc}"
+            )
+
+        except Exception as exc:
+            logger.exception("Unexpected failure downloading document number %s from Drive", document.number)
+            return DownloadResult(document=document, success=False, local_path=None, error=str(exc))
+
+    def _list_drive_folder_recursive(
+        self, folder_id: str, document_number: str
+    ) -> List[drive_client.DriveFileEntry]:
+        """List `folder_id`, recursing exactly one level into any subfolders found.
+
+        Handles both calling shapes confirmed by real evidence: an ND
+        folder whose direct children are all files, and a parent
+        meeting folder whose direct children are all ND subfolders.
+        Files found directly at this level are included alongside
+        files collected from one level of subfolders — real evidence
+        so far shows each level is pure (all-files or all-folders), but
+        nothing here assumes that has to stay true. Never recurses past
+        one level: a folder found inside a subfolder is unexpected
+        structure, logged and skipped rather than silently traversed.
+        """
+
+        entries = drive_client.list_folder(self._drive_api_key, folder_id)
+
+        files = [entry for entry in entries if not drive_client.is_folder(entry.mime_type)]
+        subfolders = [entry for entry in entries if drive_client.is_folder(entry.mime_type)]
+
+        for subfolder in subfolders:
+            sub_entries = drive_client.list_folder(self._drive_api_key, subfolder.id)
+
+            for sub_entry in sub_entries:
+                if drive_client.is_folder(sub_entry.mime_type):
+                    logger.warning(
+                        "Skipping unexpected nested folder '%s' inside '%s' while resolving "
+                        "document number %s (only one level of subfolder is traversed)",
+                        sub_entry.name,
+                        subfolder.name,
+                        document_number,
+                    )
+                    continue
+
+                files.append(sub_entry)
+
+        return files
+
+    @staticmethod
+    def _match_drive_files(
+        document_number: str, files: List[drive_client.DriveFileEntry]
+    ) -> List[drive_client.DriveFileEntry]:
+        """Match `document_number` against candidate Drive files by its leading digit sequence.
+
+        See _DRIVE_NUMBER_PREFIX_PATTERN — unverified across the full
+        real ND dataset (confirmed for exactly one document so far), so
+        callers must treat zero or multiple matches as a normal,
+        reportable failure rather than assuming this heuristic is
+        infallible.
+        """
+
+        prefix_match = _DRIVE_NUMBER_PREFIX_PATTERN.match(document_number.strip())
+
+        if prefix_match is None:
+            return []
+
+        token = prefix_match.group(0)
+
+        return [file_entry for file_entry in files if token in file_entry.name]
+
+    def _save_drive_file(self, file_entry: drive_client.DriveFileEntry) -> Path:
+        """Download or export `file_entry` into self._download_dir, returning the saved path.
+
+        Native Google files (Docs/Sheets/Slides) have no binary content
+        and must go through files.export instead of files.get?alt=media
+        — see agents/drive_client.py. That path is implemented but not
+        yet exercised against a real native file (none observed in any
+        real ND folder so far), so the first real occurrence is logged
+        distinctly for manual confirmation rather than trusted silently.
+        """
+
+        if drive_client.is_native_google_file(file_entry.mime_type):
+            logger.warning(
+                "Native Google file encountered: '%s' (mimeType=%s) — exporting via "
+                "files.export, an unverified path (see agents/drive_client.py)",
+                file_entry.name,
+                file_entry.mime_type,
+            )
+
+            export_mime_type, extension = drive_client.resolve_export_target(file_entry.mime_type)
+            saved_path = self._download_dir / f"{self._sanitize_filename(file_entry.name)}{extension}"
+
+            drive_client.export_native_file(self._drive_api_key, file_entry.id, export_mime_type, saved_path)
+
+        else:
+            saved_path = self._download_dir / self._sanitize_filename(file_entry.name)
+
+            drive_client.download_binary(self._drive_api_key, file_entry.id, saved_path)
+
+        return saved_path

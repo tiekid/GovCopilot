@@ -197,3 +197,64 @@ dependencies are left to `pip`'s own resolution.
 codebase actually uses. Adding a new direct dependency requires an
 explicit, reviewable one-line addition; nothing arrives silently via a
 freeze.
+
+## ADR-011: Google Drive support added to DownloadAgent as a second, independent path
+
+**Status:** Accepted
+
+**Context:** `docs/GovCopilot-v2-kien-truc.md` §3.1 locked the target
+architecture: the invitation's QR code points to a shared Google Drive
+folder (parent meeting folder → one ND subfolder per agenda item →
+loose files, no zip); VBĐH becomes a fallback. `scripts/test_drive_api_v3.py`,
+run against the real folder on 2026-08-22, confirmed an API-key-only
+(no OAuth) call to Drive API v3 can list a folder's contents
+(`files.list`) and download original bytes (`files.get?alt=media`)
+with byte-exact size verification. A follow-up real call against the
+parent folder ID confirmed every direct child is a subfolder
+(`mimeType: application/vnd.google-apps.folder`) — one level of
+subfolder recursion before real files, as expected. `DownloadAgent`
+(`agents/download.py`) previously had zero Drive awareness — VBĐH
+Playwright automation only.
+
+**Decision:** Add `DownloadAgent.download_from_drive()` alongside the
+existing `download()`, sharing no Playwright state with it (no browser
+session, no dialog) and returning the same `DownloadResult`, mutating
+`MeetingDocument.downloaded`/`local_path` identically — so
+`NormalizationAgent` and the pipeline require no changes. All Drive
+HTTP calls live in a new transport-only module, `agents/drive_client.py`
+(mirrors the `providers/` split for AI: it returns raw listings/bytes
+only, never makes matching or traversal decisions). Errors are typed
+three ways — `DriveForbiddenError` (HTTP 403, a sharing/permission
+problem), `DriveNetworkError` (no HTTP response at all), and
+`DriveApiError` (any other non-2xx) — so a folder shared more
+restrictively than "Anyone with the link" is diagnosed immediately,
+never mistaken for a flaky connection. `download_from_drive()` lists
+its given folder ID and recurses exactly one level into any subfolders
+found (handling both the parent-folder and single-ND-folder calling
+shapes), matches `MeetingDocument.number` against candidate file names
+by leading digit sequence (the only pattern confirmed by real
+evidence), and dispatches to `download_binary` or `export_native_file`
+by mimeType — the native-Google-file export path (Docs/Sheets/Slides)
+is implemented per the Drive API v3 reference but not yet exercised
+against a real native file, and logs a distinct warning the first time
+it fires in production.
+
+**Explicitly deferred (not decided by this ADR):**
+- Extracting the parent Drive folder ID from the invitation's QR code —
+  no code path for this exists yet.
+- Matching an ND subfolder name (e.g. "ND 13.4 - 9414") to
+  `AgendaItem.index`/`MeetingDocument.agenda_item_index` — only one
+  real meeting's folder names have been observed, and not all follow a
+  `number` suffix (e.g. "ND 2.3 (CHUA CO TAI LIEU)", "ND 5 - DM KY HOP"
+  were both observed in the same real parent folder).
+- Wiring `download_from_drive()` into `pipeline/document_pipeline.py`'s
+  loop (the "Drive primary / VBĐH fallback" decision from
+  `GovCopilot-v2-kien-truc.md` §3.1) — needs the two gaps above
+  resolved first.
+
+**Consequences:** `DownloadAgent` now has two download sources behind
+one contract, so downstream code is unaffected by which one runs. The
+Drive path is real and unit-tested (`tests/test_drive_client.py`,
+`tests/test_download_agent_drive.py`) but not yet reachable from the
+pipeline — it must be explicitly wired in a future, separately approved
+change once the deferred items above are resolved.

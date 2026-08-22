@@ -37,3 +37,6 @@ Thumbs.db
 documents/
 discovery/
 .claude/*.lock
+
+# Ad-hoc test script output (scripts/test_drive_api_v3.py)
+test_downloads/
